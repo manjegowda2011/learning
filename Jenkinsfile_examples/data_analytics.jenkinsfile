@@ -1,0 +1,78 @@
+#!/usr/bin/env groovy																											
+
+BranchName = env.BRANCH_NAME
+JENKINS_ENV = env.JENKINS_ENV
+
+properties([
+    [$class: 'ParametersDefinitionProperty', parameterDefinitions: [[$class: 'StringParameterDefinition', defaultValue: '', description: 'triggerBy', name : 'triggerBy']]],
+    [$class: 'BuildDiscarderProperty', strategy: [$class: 'LogRotator', numToKeepStr: '50']]
+])
+
+def MailRecipient = 'chandrashekhar.dh@philips.com'
+
+def errors = []
+
+node ('data_analytics_vm_temp') {
+	timestamps {
+		try {
+            stage ('Checkout') {
+                 checkout([$class: 'GitSCM', branches: [[name: '*/'+BranchName]], doGenerateSubmoduleConfigurations: false, extensions: [[$class: 'CloneOption', noTags: false, reference: '', shallow: true, timeout: 60],[$class: 'WipeWorkspace'], [$class: 'PruneStaleBranch'], [$class: 'LocalBranch']], submoduleCfg: [], userRemoteConfigs: [[credentialsId: 'd866c69b-16f0-4fce-823a-2a42bbf90a3d', url: 'ssh://tfsemea1.ta.philips.com:22/tfs/TPC_Region24/CDP2/_git/dcn-cloud-data_analytics']]])
+            }
+    		if (BranchName =~ /develop/) {
+    			stage ('build') {
+                    sh '''#!/bin/bash -l
+                        chmod -R 775 . 
+                        cd ./data_analytics
+						export http_proxy=http://165.225.104.34:9480
+						export https_proxy=http://165.225.104.34:9480
+                        sh build.sh
+                    '''
+                }
+		//stage ('deployment') {
+		//build job: 'DataAnalytics/DataAnalytics_Deployment_pipeline',parameters: [string(name: 'DATA_WORKSPACE', value: "$WORKSPACE")]
+		//build job: 'DataAnalytics/DataAnalytics_Deployment_pipeline', parameters: [string(name: 'CLUSTERNAME', value: 'hdp-cdp2-dev-2200-edge02.dev'), string(name: 'CLUSTERPATH', value: '/home/akankanala/deployment'),string(name: 'DATA_WORKSPACE', value: "$WORKSPACE")]
+		//}
+    		} else {
+    			stage ('build') {
+                   sh '''#!/bin/bash -l
+                        chmod -R 775 . 
+                        cd ./data_analytics
+						export http_proxy=http://165.225.104.34:9480
+						export https_proxy=http://165.225.104.34:9480
+                        sh build.sh
+                    '''
+				}
+            }
+
+           stage ('archiving') {               
+                archiveArtifacts '**/analytics_cdpp*.tar.gz'
+            }
+        } catch(err) {
+            errors << "errors found: ${err}"      
+        } finally {
+            if (errors.size() > 0) {
+                stage ('error reporting') {
+                    currentBuild.result = 'FAILURE'
+                    for (int i = 0; i < errors.size(); i++) {
+                        echo errors[i]; 
+                    }
+                }                
+            }    
+        	stage('informing') {
+                step([$class: 'Mailer', notifyEveryUnstableBuild: true, recipients: MailRecipient, sendToIndividuals: true])
+            }
+            stage('Cleaning workspace') {
+                step([$class: 'WsCleanup', deleteDirs: true, notFailBuild: true])
+            }
+        }
+	}
+}
+
+node('master') {
+    stage('Cleaning workspace') {
+        def wrk = pwd() + "@script/"
+        dir("${wrk}") {
+            deleteDir()
+        }
+    }
+}
